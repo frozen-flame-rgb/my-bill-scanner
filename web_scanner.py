@@ -1,59 +1,92 @@
 import streamlit as st
 from PIL import Image, ImageOps, ImageEnhance
 import io
-import os
 
-st.set_page_config(page_title="Secure Bill Scanner", page_icon="🛡️")
+# --- PAGE SETUP ---
+st.set_page_config(page_title="Mobile Pro Scanner", page_icon="📸")
 
-# Create a local folder for security if running locally
-SAVE_DIR = "saved_bills"
-if not os.path.exists(SAVE_DIR):
-    os.makedirs(SAVE_DIR)
+st.title("📸 Direct Mobile Scanner")
+st.write("Turn the camera on to scan, or upload existing photos.")
 
-def compress_to_pdf(image_list, target_kb=100):
+# --- 1. CAMERA CONTROLS ---
+# This allows you to "turn off" the camera to save battery or data
+use_camera = st.toggle("Enable Mobile Camera", value=True)
+
+all_scans = []
+
+if use_camera:
+    camera_photo = st.camera_input("Scan your bill")
+    if camera_photo:
+        all_scans.append(Image.open(camera_photo).convert('RGB'))
+        st.success("Photo captured! Add another or scroll down to generate PDF.")
+
+# --- 2. UPLOAD OPTION ---
+uploaded_files = st.file_uploader("Or upload images from gallery", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+if uploaded_files:
+    for f in uploaded_files:
+        all_scans.append(Image.open(f).convert('RGB'))
+
+# --- 3. THE LOGIC (Scanner Processing & <100KB Compression) ---
+def finalize_pdf(image_list, target_kb=100):
     quality = 80
     scale = 0.9
+    
     while True:
         pdf_buffer = io.BytesIO()
-        processed = []
+        processed_images = []
+        
         for img in image_list:
-            # Grayscale + Contrast for that 'Scanner' look
+            # Apply 'Scanner Filter' (Grayscale + High Contrast)
+            # This makes the PDF look professional and keeps size tiny
             temp = ImageOps.grayscale(img)
-            temp = ImageEnhance.Contrast(temp).enhance(1.8)
+            temp = ImageEnhance.Contrast(temp).enhance(2.0)
+            
+            # Resize based on current scale
             new_size = (int(temp.width * scale), int(temp.height * scale))
             temp = temp.resize(new_size, Image.Resampling.LANCZOS)
-            processed.append(temp)
+            processed_images.append(temp)
         
-        processed[0].save(pdf_buffer, format="PDF", save_all=True, 
-                          append_images=processed[1:], quality=quality, optimize=True)
+        # Save as a multi-page PDF
+        processed_images[0].save(
+            pdf_buffer, 
+            format="PDF", 
+            save_all=True, 
+            append_images=processed_images[1:], 
+            quality=quality, 
+            optimize=True
+        )
         
         size_kb = pdf_buffer.tell() / 1024
+        
+        # Check if we hit the <100KB goal
         if size_kb <= target_kb or scale < 0.2:
             return pdf_buffer.getvalue(), size_kb
+        
+        # If too big, shrink quality and scale further
         quality -= 10
         scale -= 0.1
 
-st.title("🛡️ Secure Bill Scanner")
-st.info("Files are processed in RAM and deleted when you close the tab.")
+# --- 4. PREVIEW & DOWNLOAD ---
+if all_scans:
+    st.divider()
+    st.subheader(f"Captured Pages: {len(all_scans)}")
+    
+    if st.button("✨ Create PDF (<100KB)"):
+        with st.spinner("Processing..."):
+            pdf_bytes, final_size = finalize_pdf(all_scans)
+            
+            st.success(f"PDF Created! Final Size: {final_size:.2f} KB")
+            st.download_button(
+                label="📥 Download Scanned Bill",
+                data=pdf_bytes,
+                file_name="mobile_scan.pdf",
+                mime="application/pdf"
+            )
+            
+    # Show small thumbnails of what you've scanned
+    cols = st.columns(4)
+    for i, img in enumerate(all_scans):
+        cols[i % 4].image(img, use_container_width=True)
 
-files = st.file_uploader("Upload or Capture", type=['jpg','png','jpeg'], accept_multiple_files=True)
-camera = st.camera_input("Scan with Phone Camera")
-
-images = [Image.open(f).convert('RGB') for f in files] if files else []
-if camera: images.append(Image.open(camera).convert('RGB'))
-
-if images:
-    if st.button("Generate & Secure PDF"):
-        pdf_bytes, size = compress_to_pdf(images)
-        st.success(f"Ready! Size: {size:.2f} KB")
-        
-        # Option to download
-        st.download_button("⬇️ Download PDF", data=pdf_bytes, file_name="bill_scan.pdf")
-        
-        # If running on your own PC, this saves a backup automatically
-        try:
-            with open(f"{SAVE_DIR}/last_scan.pdf", "wb") as f:
-                f.write(pdf_bytes)
-            st.caption(f"🔒 A backup copy was secured in the '{SAVE_DIR}' folder on this device.")
-        except:
-            pass
+else:
+    st.info("No images detected. Please take a photo or upload one.")
