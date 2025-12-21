@@ -1,101 +1,77 @@
 import streamlit as st
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image
 import io
 import datetime
 
-# --- UI SETUP ---
-st.set_page_config(page_title="UltraScan Desktop", layout="wide")
+st.set_page_config(page_title="Natural Bill Scanner", layout="centered")
 
-st.markdown("""
-    <style>
-    .stCamera { border: 5px solid #007bff; border-radius: 15px; }
-    div.stButton > button { height: 3em; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
+st.title("📷 Natural Photo Scanner")
+st.write("No filters. No weird colors. Just your photo, kept clear and under 100KB.")
 
-st.title("📄 Professional Bill Scanner")
-st.caption("Optimized for Desktop with Phone-Webcam support")
-
-# --- SIDEBAR CONTROLS ---
-with st.sidebar:
-    st.header("🛠️ Image Fixers")
-    st.write("Adjust these if the photo looks 'weird'")
+# --- THE LOGIC ---
+def natural_compression(image, target_kb=95):
+    """Only resizes the image to meet the 100KB limit without adding filters."""
+    # We start with high quality settings
+    quality = 90
+    scale = 1.0
     
-    # Target Size
-    target_kb = st.slider("Max File Size (KB)", 40, 150, 95)
-    
-    # Toned down defaults to avoid 'weird' look
-    bright_val = st.slider("Light Boost (Digital Flash)", 0.8, 2.5, 1.2)
-    cont_val = st.slider("Text Contrast", 1.0, 3.0, 1.5)
-    sharp_val = st.slider("Fix Blur (Sharpness)", 1.0, 5.0, 1.5)
-    
-    st.divider()
-    if st.button("Clear Memory"):
-        st.rerun()
-
-# --- MAIN INTERFACE ---
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    st.subheader("1. Capture Scan")
-    input_mode = st.radio("Input Source:", ["Live Camera", "Upload File"], horizontal=True)
-    
-    if input_mode == "Live Camera":
-        st.info("🔦 Tip: If it's too dark, turn on your room lights or use the 'Light Boost' slider.")
-        raw_file = st.camera_input("Scanner Window")
-    else:
-        raw_file = st.file_uploader("Upload Image", type=['jpg', 'jpeg', 'png'])
-
-with col2:
-    st.subheader("2. Final PDF Preview")
-    if raw_file:
-        # Load Image
-        img = Image.open(raw_file).convert('RGB')
+    while True:
+        output_buffer = io.BytesIO()
         
-        # --- ENHANCEMENT LOGIC ---
-        def professional_clean(image):
-            # 1. Soft Grayscale (Prevents 'weird' pixelation)
-            processed = ImageOps.grayscale(image)
-            
-            # 2. Apply User Adjustments
-            processed = ImageEnhance.Brightness(processed).enhance(bright_val)
-            processed = ImageEnhance.Contrast(processed).enhance(cont_val)
-            processed = ImageEnhance.Sharpness(processed).enhance(sharp_val)
-            
-            return processed
+        # Calculate new dimensions (keeping aspect ratio)
+        width, height = image.size
+        new_w = int(width * scale)
+        new_h = int(height * scale)
+        
+        # Safety: If image gets too tiny, the text will be unreadable no matter what
+        if new_w < 500:
+            return None, "Error: Image is too small to stay under 100KB with clarity."
 
-        cleaned_img = professional_clean(img)
-        st.image(cleaned_img, caption="How the PDF will look", use_container_width=True)
+        # Use LANCZOS - it's the highest quality resizing method for text sharpness
+        resized_img = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        
+        # Save as PDF using JPEG-style compression (best for photos)
+        resized_img.save(output_buffer, format="PDF", quality=quality, optimize=True)
+        size_kb = output_buffer.tell() / 1024
+        
+        if size_kb <= target_kb:
+            return output_buffer.getvalue(), size_kb
+        
+        # If still too big, we slowly reduce scale first, then quality
+        scale -= 0.1
+        if scale < 0.5:
+            quality -= 5
+        
+        # Hard stop to prevent infinite loops
+        if quality < 30:
+            return output_buffer.getvalue(), size_kb
 
-        # --- COMPRESSION ENGINE ---
-        if st.button("💾 Generate Optimized PDF"):
-            scale = 1.0
-            qual = 90
+# --- THE INTERFACE ---
+uploaded_file = st.file_uploader("Upload Bill Image", type=['jpg', 'png', 'jpeg'])
+camera_file = st.camera_input("Take a photo of your bill")
+
+target_source = camera_file if camera_file else uploaded_file
+
+if target_source:
+    # 1. Open the original, raw photo exactly as the camera took it
+    original_image = Image.open(target_source).convert('RGB')
+    st.image(original_image, caption="Current View", use_container_width=True)
+    
+    # 2. Action Button
+    if st.button("🚀 Convert to 100KB PDF"):
+        with st.spinner("Optimizing file size..."):
+            pdf_bytes, final_size = natural_compression(original_image)
             
-            while True:
-                buf = io.BytesIO()
-                # Resize based on scale
-                w, h = cleaned_img.size
-                resized = cleaned_img.resize((int(w*scale), int(h*scale)), Image.Resampling.LANCZOS)
+            if pdf_bytes:
+                st.success(f"Optimized! Final Size: {final_size:.2f} KB")
                 
-                resized.save(buf, format="PDF", quality=qual, optimize=True)
-                size_kb = buf.tell() / 1024
-                
-                if size_kb <= target_kb or scale < 0.2:
-                    st.success(f"Final Size: {size_kb:.1f} KB")
-                    
-                    # File naming
-                    filename = f"Scan_{datetime.date.today().strftime('%b%d')}.pdf"
-                    
-                    st.download_button(
-                        label=f"📥 Download {filename}",
-                        data=buf.getvalue(),
-                        file_name=filename,
-                        mime="application/pdf"
-                    )
-                    break
-                
-                scale -= 0.1
-                qual -= 5
-    else:
-        st.warning("Awaiting image input...")
+                # Download with current date
+                file_name = f"Bill_{datetime.datetime.now().strftime('%d_%m_%Y')}.pdf"
+                st.download_button(
+                    label="⬇️ Download PDF",
+                    data=pdf_bytes,
+                    file_name=file_name,
+                    mime="application/pdf"
+                )
+            else:
+                st.error(final_size)
