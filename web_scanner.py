@@ -4,75 +4,71 @@ import io
 import datetime
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Pure Photo Scanner", layout="centered")
+st.set_page_config(page_title="High-Res Bill Scanner", layout="centered")
 
-st.title("📷 Pure Photo to PDF")
-st.write("This version uses NO filters. It keeps your photo exactly as your camera took it.")
+st.title("📷 High-Resolution Scanner")
+st.write("Click below to use your **phone's actual camera** for the best quality.")
 
-# --- THE COMPRESSION LOGIC ---
-def pure_compression(image, target_kb=95):
-    """Resizes the raw photo to fit under 100KB with zero filters."""
-    # We start at 100% size and 90% quality
+# --- THE COMPRESSION LOGIC (Highest Quality Resampling) ---
+def compress_high_quality(image, target_kb=98):
+    """Shrinks the image size while keeping the text as crisp as possible."""
     scale = 1.0
-    quality = 90
+    quality = 95
     
     while True:
         output_buffer = io.BytesIO()
-        
-        # Calculate new dimensions
         width, height = image.size
+        
+        # We use LANCZOS because it is the most powerful resizing math available
+        # It prevents the 'blur' you see in lower-quality apps
         new_w = int(width * scale)
         new_h = int(height * scale)
         
-        # 1. High-quality resize (LANCZOS) to keep text sharp
         resized_img = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
         
-        # 2. Save as PDF with native color profile
+        # Save as PDF with 'optimize=True' to find the smallest file size 
+        # without touching the actual image pixels
         resized_img.save(output_buffer, format="PDF", quality=quality, optimize=True)
         size_kb = output_buffer.tell() / 1024
         
-        # 3. Check if target is met
         if size_kb <= target_kb:
             return output_buffer.getvalue(), size_kb
         
-        # 4. If still over 100KB, shrink the size slightly and try again
-        scale -= 0.1
-        if scale < 0.4:  # If too small, start reducing internal quality
+        # Reduce scale slowly to keep high resolution
+        scale -= 0.05
+        if scale < 0.5 and quality > 50:
             quality -= 5
-            
-        if quality < 30 or scale < 0.1:
+        
+        if scale < 0.1: # Absolute limit
             return output_buffer.getvalue(), size_kb
 
-# --- THE INTERFACE ---
-st.subheader("1. Capture or Upload")
-col1, col2 = st.columns(2)
+# --- THE NATIVE INTERFACE ---
+st.divider()
 
-with col1:
-    camera_file = st.camera_input("Take a photo")
-with col2:
-    upload_file = st.file_uploader("Or upload from PC", type=['jpg', 'jpeg', 'png'])
+# This is the "Magic" button. On mobile, this will let you choose 
+# "Take Photo" which opens your REAL phone camera app.
+source_file = st.file_uploader("📸 TAP HERE TO TAKE A PHOTO", type=['jpg', 'jpeg', 'png'])
 
-source = camera_file if camera_file else upload_file
-
-if source:
-    # Open the image exactly as it is (RGB mode)
-    raw_image = Image.open(source).convert('RGB')
+if source_file:
+    # 1. Open the original image exactly as your camera took it
+    # No filters, no grayscale, no 'weird' enhancements.
+    raw_image = Image.open(source_file).convert('RGB')
     
-    st.subheader("2. Preview (Natural)")
-    st.image(raw_image, caption="Original Photo Quality", use_container_width=True)
+    st.subheader("2. Preview")
+    st.image(raw_image, caption="Native Camera Quality", use_container_width=True)
     
-    if st.button("🚀 Convert to PDF (<100KB)"):
-        with st.spinner("Shrinking file size while keeping clarity..."):
-            pdf_bytes, final_size = pure_compression(raw_image)
+    if st.button("🚀 Convert to 100KB PDF", type="primary"):
+        with st.spinner("Processing high-res image..."):
+            pdf_data, final_size = compress_high_quality(raw_image)
             
-            st.success(f"Final PDF Size: {final_size:.2f} KB")
-            
-            # Use date for filename
-            file_name = f"Scan_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-            
-            st.download_button(
-                label="📥 Download Natural PDF",
-                data=pdf_bytes,
-                file_name=file_name,
-                mime="application/pdf"
-            )
+            if pdf_data:
+                st.success(f"Success! Final Size: {final_size:.2f} KB")
+                
+                # Dynamic filename
+                timestamp = datetime.datetime.now().strftime('%H%M%S')
+                st.download_button(
+                    label="⬇️ Download High-Res PDF",
+                    data=pdf_data,
+                    file_name=f"Clean_Scan_{timestamp}.pdf",
+                    mime="application/pdf"
+                )
