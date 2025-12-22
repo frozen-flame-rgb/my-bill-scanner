@@ -2,85 +2,106 @@ import streamlit as st
 from PIL import Image
 import io
 import datetime
+import re
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Simple Photo Scanner", layout="centered")
+st.set_page_config(page_title="Multi-Page Bill Scanner", layout="centered")
 
-st.title("📷 Simple Photo to PDF")
-st.write("Upload a photo. Rotate if needed. Get a clear, small PDF.")
+st.title("📑 Multi-Page Bill Scanner")
+st.write("Upload one or more photos. They will be merged into a single PDF under 100KB.")
 
-# --- THE COMPRESSION LOGIC (High Quality, No Filters) ---
-def compress_image(image, target_kb=98):
-    """Shrinks the image using high-quality resizing until it fits."""
+# --- THE COMPRESSION LOGIC (Multi-Page Support) ---
+def compress_to_multi_page_pdf(image_list, target_kb=98):
+    """Combines multiple images into one PDF and shrinks them to fit 100KB."""
     scale = 1.0
-    quality = 95
+    quality = 90
     
     while True:
         output_buffer = io.BytesIO()
-        width, height = image.size
+        processed_images = []
         
-        # Calculate new dimensions
-        new_w = int(width * scale)
-        new_h = int(height * scale)
+        for img in image_list:
+            width, height = img.size
+            new_w = int(width * scale)
+            new_h = int(height * scale)
+            
+            # High-quality resize for each page
+            resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            processed_images.append(resized)
         
-        # Stop if image gets too small to be readable
-        if new_w < 300: return None, 0
-
-        # Use LANCZOS for sharp text edges
-        resized_img = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        # Save all images into one PDF
+        processed_images[0].save(
+            output_buffer, 
+            format="PDF", 
+            save_all=True, 
+            append_images=processed_images[1:], 
+            quality=quality, 
+            optimize=True
+        )
         
-        # Save with optimization
-        resized_img.save(output_buffer, format="PDF", quality=quality, optimize=True)
         size_kb = output_buffer.tell() / 1024
         
         if size_kb <= target_kb:
             return output_buffer.getvalue(), size_kb
         
-        # Slowly reduce scale and quality
-        scale -= 0.05
-        if scale < 0.6 and quality > 50:
+        # Reduce scale and quality to fit more pages under 100KB
+        scale -= 0.1
+        if scale < 0.5:
             quality -= 5
-        
-        # Hard stop
-        if scale < 0.15: return None, 0
+            
+        if scale < 0.1 or quality < 20:
+            return output_buffer.getvalue(), size_kb
 
 # --- THE INTERFACE ---
 st.divider()
-st.subheader("1. Upload Photo")
-st.caption("On mobile, click 'Browse' then choose 'Camera' for best results.")
-uploaded_file = st.file_uploader("Choose your image file", type=['jpg', 'jpeg', 'png'])
 
-if uploaded_file:
-    # Open the image and convert to RGB (standard color mode)
-    raw_image = Image.open(uploaded_file).convert('RGB')
+# 1. Custom Naming Section
+st.subheader("1. File Name")
+user_filename = st.text_input("Enter PDF Name (Letters & Numbers only):", "My_Bill_Scan")
+# Clean the filename to remove any weird characters
+clean_name = re.sub(r'[^a-zA-Z0-9]', '_', user_filename)
+
+# 2. Multi-Upload Section
+st.subheader("2. Upload Bills")
+st.caption("On mobile, click 'Browse' then 'Camera'. You can select multiple files from gallery.")
+uploaded_files = st.file_uploader("Select one or more images", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+
+if uploaded_files:
+    # Load all images into a list
+    all_images = []
+    for f in uploaded_files:
+        img = Image.open(f).convert('RGB')
+        all_images.append(img)
     
-    st.subheader("2. Rotate & Preview")
+    st.subheader(f"3. Preview & Rotate ({len(all_images)} pages)")
     
-    # Add Rotation Controls
-    angle = st.radio("Rotate Image clockwise:", options=[0, 90, 180, 270], horizontal=True)
+    # Rotation Control (Applies to ALL images in this session)
+    angle = st.radio("Rotate all images clockwise:", options=[0, 90, 180, 270], horizontal=True)
     
-    # Apply rotation if a value other than 0 is selected
-    if angle != 0:
-        # expand=True ensures the whole image fits after rotation
-        raw_image = raw_image.rotate(-angle, expand=True) 
-    
-    st.image(raw_image, caption="Preview (Corrected Orientation)", use_container_width=True)
-    
+    final_images = []
+    cols = st.columns(3) # Show 3 images per row in preview
+    for i, img in enumerate(all_images):
+        if angle != 0:
+            img = img.rotate(-angle, expand=True)
+        final_images.append(img)
+        cols[i % 3].image(img, caption=f"Page {i+1}", use_container_width=True)
+
+    # 3. Execution
     st.divider()
-    st.subheader("3. Create PDF")
-    if st.button("🚀 Convert to 100KB PDF", type="primary"):
-        with st.spinner("Processing image..."):
-            pdf_data, final_size = compress_image(raw_image)
+    if st.button("🚀 Merge into 100KB PDF", type="primary"):
+        with st.spinner(f"Merging {len(final_images)} pages into one PDF..."):
+            pdf_data, final_size = compress_to_multi_page_pdf(final_images)
             
             if pdf_data:
-                st.success(f"Success! Final Size: {final_size:.2f} KB")
+                st.success(f"Final Size: {final_size:.2f} KB")
                 
-                timestamp = datetime.datetime.now().strftime('%H%M%S')
+                # Combine user name with date
+                date_str = datetime.datetime.now().strftime('%d_%m_%y')
+                full_filename = f"{clean_name}_{date_str}.pdf"
+                
                 st.download_button(
-                    label="⬇️ Download PDF",
+                    label=f"⬇️ Download {full_filename}",
                     data=pdf_data,
-                    file_name=f"Scan_{timestamp}.pdf",
+                    file_name=full_filename,
                     mime="application/pdf"
                 )
-            else:
-                st.error("Could not compress the image under 100KB without losing too much quality.")
