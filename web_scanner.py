@@ -1,96 +1,76 @@
 import streamlit as st
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image
 import io
 import datetime
 import re
-import cv2
-import numpy as np
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Pro Bill Scanner", layout="centered")
+st.set_page_config(page_title="High-Res Scanner", layout="centered")
 
-st.title("📑 Pro Document Scanner")
-st.write("Since browsers can't use your phone's native hardware sensors, use **'Clean Mode'** to fix lighting and shadows.")
+st.title("📷 Quality Multi-Page Scanner")
+st.write("No filters. Just your high-quality camera photos merged into a single 100KB PDF.")
 
-# --- THE "DEVELOPER" ENHANCEMENT LOGIC ---
-def apply_clean_filter(image):
-    """Uses OpenCV to remove shadows and brighten the 'paper' look."""
-    # Convert PIL to OpenCV format
-    img_array = np.array(image)
-    img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-    
-    # 1. Convert to Grayscale
-    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-    
-    # 2. Adaptive Thresholding (This removes shadows and makes it look like a 'scan')
-    # It calculates lighting locally, so it handles shadows in the corner of the page.
-    th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                cv2.THRESH_BINARY, 11, 2)
-    
-    # Convert back to PIL
-    return Image.fromarray(th)
-
-# --- COMPRESSION LOGIC (LANCZOS for Sharpness) ---
-def compress_to_multi_page_pdf(image_list, target_kb=98):
-    scale, quality = 1.0, 90
+# --- THE COMPRESSION LOGIC (Pure Quality) ---
+def compress_to_100kb_pdf(image_list, target_kb=98):
+    """Shrinks images with zero filters using pro-grade LANCZOS resizing."""
+    scale, quality = 1.0, 95
     while True:
         buf = io.BytesIO()
         processed = []
         for img in image_list:
-            w, h = img.size
-            # LANCZOS keeps text edges sharp
-            resized = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+            width, height = img.size
+            # Use LANCZOS to keep text and handwriting edges sharp
+            new_size = (int(width * scale), int(height * scale))
+            resized = img.resize(new_size, Image.Resampling.LANCZOS)
             processed.append(resized)
         
-        # Merge pages
+        # Save pages as a multi-page PDF
         processed[0].save(buf, format="PDF", save_all=True, append_images=processed[1:], 
                           quality=quality, optimize=True)
         size = buf.tell() / 1024
-        if size <= target_kb or scale < 0.1:
+        
+        if size <= target_kb:
             return buf.getvalue(), size
-        scale -= 0.1
-        if scale < 0.5: quality -= 5
+        
+        # Slowly reduce size to maintain resolution as long as possible
+        scale -= 0.05
+        if scale < 0.5 and quality > 40:
+            quality -= 5
+            
+        if scale < 0.1: # Absolute floor
+            return buf.getvalue(), size
 
 # --- THE INTERFACE ---
 st.divider()
-user_filename = st.text_input("1. File Name:", "My_Bill")
+user_filename = st.text_input("1. File Name (Letters/Numbers):", "My_Notes")
 clean_name = re.sub(r'[^a-zA-Z0-9]', '_', user_filename)
 
-# Feature selection
-st.subheader("2. Enhancement Settings")
-col_opt1, col_opt2 = st.columns(2)
-with col_opt1:
-    use_clean_mode = st.toggle("✨ Enable Clean Mode (B&W Scan)", value=False)
-with col_opt2:
-    rotation_angle = st.radio("Rotate Clockwise:", [0, 90, 180, 270], horizontal=True)
-
-uploaded_files = st.file_uploader("3. Upload Photos", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+st.subheader("2. Upload Photos")
+st.caption("On your Vivo, click 'Browse' then 'Camera' to use your full 50MP/64MP power.")
+uploaded_files = st.file_uploader("Select images", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
 
 if uploaded_files:
+    # Open images exactly as they were taken
     raw_images = [Image.open(f).convert('RGB') for f in uploaded_files]
-    final_processed_list = []
     
-    st.subheader(f"Preview ({len(raw_images)} pages)")
+    st.subheader(f"3. Preview & Rotate ({len(raw_images)} pages)")
+    rotation = st.radio("Fix orientation:", [0, 90, 180, 270], horizontal=True)
+    
+    final_list = []
     cols = st.columns(3)
-    
     for i, img in enumerate(raw_images):
-        # Apply Rotation
-        if rotation_angle != 0:
-            img = img.rotate(-rotation_angle, expand=True)
-            
-        # Apply Clean Filter if toggled
-        if use_clean_mode:
-            img = apply_clean_filter(img)
-        
-        final_processed_list.append(img)
+        if rotation != 0:
+            img = img.rotate(-rotation, expand=True)
+        final_list.append(img)
         cols[i % 3].image(img, caption=f"Page {i+1}", use_container_width=True)
 
     st.divider()
-    if st.button("🚀 Merge into 100KB PDF", type="primary"):
-        with st.spinner("Processing..."):
-            pdf_data, final_size = compress_to_multi_page_pdf(final_processed_list)
+    if st.button("🚀 Merge to 100KB PDF", type="primary"):
+        with st.spinner("Optimizing your Vivo photos..."):
+            pdf_data, final_size = compress_to_100kb_pdf(final_list)
             st.success(f"Final Size: {final_size:.2f} KB")
             
-            # Save name with current date
+            # Save with custom name + date
             date_str = datetime.datetime.now().strftime('%d_%m')
-            st.download_button(f"⬇️ Download {clean_name}_{date_str}.pdf", pdf_data, f"{clean_name}_{date_str}.pdf", "application/pdf")
+            st.download_button(f"⬇️ Download {clean_name}_{date_str}.pdf", pdf_data, 
+                               f"{clean_name}_{date_str}.pdf", "application/pdf")
