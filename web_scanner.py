@@ -6,9 +6,9 @@ import datetime
 import re
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Scanner", layout="centered")
+st.set_page_config(page_title="Pro Precision Scanner", layout="centered")
 
-st.title("📑Scanner")
+st.title("📑 Pro Precision Multi-Page Scanner")
 st.write("Take/Upload a photo, **manually crop any side**, and add it to your 100KB PDF.")
 
 # --- THE COMPRESSION LOGIC (High Quality, No Filters) ---
@@ -115,3 +115,4 @@ if st.session_state.scanned_pages:
         if st.button("🗑️ Reset All Pages"):
             st.session_state.scanned_pages = []
             st.rerun()
+
