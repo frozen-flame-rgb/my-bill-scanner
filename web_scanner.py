@@ -1,17 +1,18 @@
 import streamlit as st
 from PIL import Image
+from streamlit_cropper import st_cropper
 import io
 import datetime
 import re
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="High-Res Scanner", layout="centered")
+st.set_page_config(page_title="Pro Precision Scanner", layout="centered")
 
-st.title("📷 Quality Multi-Page Scanner")
-st.write("No filters. Just your high-quality camera photos merged into a single 100KB PDF.")
+st.title("📑 Pro Precision Scanner")
+st.write("Take a photo, **manually crop** the area you want, and add it to your PDF.")
 
-# --- THE COMPRESSION LOGIC (Pure Quality) ---
-def compress_to_100kb_pdf(image_list, target_kb=98):
+# --- THE COMPRESSION LOGIC ---
+def compress_to_100kb(image_list, target_kb=98):
     """Shrinks images with zero filters using pro-grade LANCZOS resizing."""
     scale, quality = 1.0, 95
     while True:
@@ -19,12 +20,12 @@ def compress_to_100kb_pdf(image_list, target_kb=98):
         processed = []
         for img in image_list:
             width, height = img.size
-            # Use LANCZOS to keep text and handwriting edges sharp
+            # Using LANCZOS to keep text edges sharp
             new_size = (int(width * scale), int(height * scale))
             resized = img.resize(new_size, Image.Resampling.LANCZOS)
             processed.append(resized)
         
-        # Save pages as a multi-page PDF
+        # Merge all cropped pages into a single PDF
         processed[0].save(buf, format="PDF", save_all=True, append_images=processed[1:], 
                           quality=quality, optimize=True)
         size = buf.tell() / 1024
@@ -32,45 +33,68 @@ def compress_to_100kb_pdf(image_list, target_kb=98):
         if size <= target_kb:
             return buf.getvalue(), size
         
-        # Slowly reduce size to maintain resolution as long as possible
         scale -= 0.05
         if scale < 0.5 and quality > 40:
             quality -= 5
-            
-        if scale < 0.1: # Absolute floor
+        if scale < 0.05: # Absolute floor
             return buf.getvalue(), size
+
+# --- INITIALIZE SESSION STATE ---
+if 'scanned_pages' not in st.session_state:
+    st.session_state.scanned_pages = []
 
 # --- THE INTERFACE ---
 st.divider()
-user_filename = st.text_input("1. File Name (Letters/Numbers):", "My_Notes")
+
+# 1. File Naming
+user_filename = st.text_input("1. Enter PDF Name:", "My_Notes_Scan")
 clean_name = re.sub(r'[^a-zA-Z0-9]', '_', user_filename)
 
-st.subheader("2. Upload Photos")
-st.caption("On your Vivo, click 'Browse' then 'Camera' to use your full 50MP/64MP power.")
-uploaded_files = st.file_uploader("Select images", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+# 2. Upload and Crop
+st.subheader("2. Add & Crop Pages")
+uploaded_file = st.file_uploader("Upload or Take Photo", type=['jpg', 'jpeg', 'png'])
 
-if uploaded_files:
-    # Open images exactly as they were taken
-    raw_images = [Image.open(f).convert('RGB') for f in uploaded_files]
+if uploaded_file:
+    # Open exactly as taken - NO FILTERS
+    img = Image.open(uploaded_file).convert('RGB')
     
-    st.subheader(f"3. Preview & Rotate ({len(raw_images)} pages)")
-    rotation = st.radio("Fix orientation:", [0, 90, 180, 270], horizontal=True)
+    st.info("📐 **Drag the box to select your notes. The background will be removed.**")
     
-    final_list = []
-    cols = st.columns(3)
-    for i, img in enumerate(raw_images):
-        if rotation != 0:
-            img = img.rotate(-rotation, expand=True)
-        final_list.append(img)
-        cols[i % 3].image(img, caption=f"Page {i+1}", use_container_width=True)
+    # Manual cropping tool replaces 'Auto-Scan'
+    cropped_img = st_cropper(img, realtime_update=True, box_color='#007bff', aspect_ratio=None)
+    
+    if st.button("➕ Add This Page"):
+        st.session_state.scanned_pages.append(cropped_img)
+        st.success(f"Page {len(st.session_state.scanned_pages)} added!")
 
+# 3. Final Multi-Page Preview & Download
+if st.session_state.scanned_pages:
     st.divider()
-    if st.button("🚀 Merge to 100KB PDF", type="primary"):
-        with st.spinner("Optimizing your Vivo photos..."):
-            pdf_data, final_size = compress_to_100kb_pdf(final_list)
-            st.success(f"Final Size: {final_size:.2f} KB")
-            
-            # Save with custom name + date
-            date_str = datetime.datetime.now().strftime('%d_%m')
-            st.download_button(f"⬇️ Download {clean_name}_{date_str}.pdf", pdf_data, 
-                               f"{clean_name}_{date_str}.pdf", "application/pdf")
+    st.subheader(f"3. Final PDF Preview ({len(st.session_state.scanned_pages)} pages)")
+    
+    cols = st.columns(3)
+    for i, p in enumerate(st.session_state.scanned_pages):
+        cols[i % 3].image(p, caption=f"Page {i+1}", use_container_width=True)
+    
+    col_run, col_clear = st.columns(2)
+    
+    with col_run:
+        if st.button("🚀 Create 100KB PDF", type="primary"):
+            with st.spinner("Processing sharp crops..."):
+                pdf_data, final_size = compress_to_100kb(st.session_state.scanned_pages)
+                
+                st.success(f"Final Size: {final_size:.2f} KB")
+                
+                # Naming with date
+                date_str = datetime.datetime.now().strftime('%d_%m')
+                full_name = f"{clean_name}_{date_str}.pdf"
+                
+                st.download_button(label=f"⬇️ Download {full_filename}", 
+                                   data=pdf_data, 
+                                   file_name=full_name, 
+                                   mime="application/pdf")
+    
+    with col_clear:
+        if st.button("🗑️ Reset Everything"):
+            st.session_state.scanned_pages = []
+            st.rerun()
